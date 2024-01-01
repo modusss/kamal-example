@@ -44,7 +44,8 @@ volumes:
 #   user: app
 
 # Configure builder setup.
-# builder:
+builder:
+   multiarch: false # to speed up 
 #   args:
 #     RUBY_VERSION: 3.2.0
 #   secrets:
