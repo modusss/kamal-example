@@ -1,62 +1,48 @@
-# syntax = docker/dockerfile:1
+# Use a official Ruby image as a parent image
+FROM ruby:3.0.0-slim as base
 
-# Make sure RUBY_VERSION matches the Ruby version in .ruby-version and Gemfile
-ARG RUBY_VERSION=3.0.0
-FROM registry.docker.com/library/ruby:$RUBY_VERSION-slim as base
-
-# Rails app lives here
+# Set the working directory in the container
 WORKDIR /rails
 
-# Set production environment
-ENV RAILS_ENV="production" \
-    BUNDLE_DEPLOYMENT="1" \
-    BUNDLE_PATH="/usr/local/bundle" \
-    BUNDLE_WITHOUT="development"
+# Set environment variables for Rails
+ENV RAILS_ENV=production \
+    BUNDLE_DEPLOYMENT=1 \
+    RAILS_MASTER_KEY=76ffba0370aeea3b6a3971f1f6309674 \
+    REDIS_URL=redis://redis_app:6400 \
+    BUNDLE_PATH=/usr/local/bundle \
+    BUNDLE_WITHOUT=development
 
-
-# Throw-away build stage to reduce size of final image
-FROM base as build
-
-# Install packages needed to build gems
+# Install system dependencies required for Rails and Apache
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y build-essential git libvips pkg-config
+    apt-get install --no-install-recommends -y build-essential curl libsqlite3-0 libvips42 git && \
+    apt-get install --no-install-recommends -y apache2 apache2-utils && \
+    a2enmod proxy proxy_http proxy_balancer lbmethod_byrequests && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install application gems
+# Copy the Gemfile and Gemfile.lock into the container
 COPY Gemfile Gemfile.lock ./
-RUN bundle install && \
-    rm -rf ~/.bundle/ "${BUNDLE_PATH}"/ruby/*/cache "${BUNDLE_PATH}"/ruby/*/bundler/gems/*/.git && \
-    bundle exec bootsnap precompile --gemfile
 
-# Copy application code
+# Install Ruby gems, including those needed in production
+RUN bundle install --without development test
+
+# Copy the main application
 COPY . .
 
-# Precompile bootsnap code for faster boot times
-RUN bundle exec bootsnap precompile app/ lib/
+# Precompile Rails assets (note: this requires a secret key base environment variable)
+RUN SECRET_KEY_BASE_DUMMY=1 RAILS_ENV=production bundle exec rake assets:precompile
 
-# Precompiling assets for production without requiring secret RAILS_MASTER_KEY
-RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
+# Add a script to start the server and Apache
+COPY start-script.sh /start-script.sh
+RUN chmod +x /start-script.sh
 
+# Set up Apache virtual host
+COPY my-apache-config.conf /etc/apache2/sites-available/000-default.conf
 
-# Final stage for app image
-FROM base
+# Make sure the Apache2 PID doesn't exist to avoid startup problems
+RUN rm -f /var/run/apache2/apache2.pid
 
-# Install packages needed for deployment
-RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y curl libsqlite3-0 libvips && \
-    rm -rf /var/lib/apt/lists /var/cache/apt/archives
+# Expose port 80 to the Docker network
+EXPOSE 80
 
-# Copy built artifacts: gems, application
-COPY --from=build /usr/local/bundle /usr/local/bundle
-COPY --from=build /rails /rails
-
-# Run and own only the runtime files as a non-root user for security
-RUN useradd rails --create-home --shell /bin/bash && \
-    chown -R rails:rails db log storage tmp
-USER rails:rails
-
-# Entrypoint prepares the database.
-ENTRYPOINT ["/rails/bin/docker-entrypoint"]
-
-# Start the server by default, this can be overwritten at runtime
-EXPOSE 3000
-CMD ["./bin/rails", "server"]
+# Set the container to run the start script by default
+CMD ["/start-script.sh"]
