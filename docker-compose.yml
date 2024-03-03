@@ -1,34 +1,46 @@
 version: '3.7'
 
 services:
-  traefik:
-    image: traefik:v2.3
-    command:
-      - "--providers.docker"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
-      - "--certificatesresolvers.myresolver.acme.email=fillypef@gmail.com"
-      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+  nginx:
+    image: nginx:latest
+    container_name: nginx
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock"
-      - "./letsencrypt:/letsencrypt"
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/vhost.d:/etc/nginx/vhost.d:ro
+      - ./nginx/html:/usr/share/nginx/html:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+    depends_on:
+      - app
 
-  myapp:
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./nginx/certs:/etc/letsencrypt
+      - ./nginx/html:/var/www/html
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait ${!}; done;'
+    depends_on:
+      - nginx
+
+  app:
     build: .
+    image: app
+    volumes:
+      - app-storage:/rails/storage
+    environment:
+      - RAILS_MASTER_KEY=76ffba0370aeea3b6a3971f1f6309674
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.myapp.rule=Host(`zapsendapp.bio`)"
-      - "traefik.http.routers.myapp.entrypoints=web"
-      - "traefik.http.routers.myapp-secure.rule=Host(`zapsendapp.bio`)"
-      - "traefik.http.routers.myapp-secure.entrypoints=websecure"
-      - "traefik.http.routers.myapp-secure.tls.certresolver=myresolver"
+      - "traefik.enable=false" # if you still have traefik labels, disable them
     networks:
       - web
 
 networks:
   web:
     external: true
+
+volumes:
+  app-storage:
