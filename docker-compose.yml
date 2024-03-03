@@ -1,46 +1,63 @@
+
 version: '3.7'
 
 services:
-  nginx:
-    image: nginx:latest
-    container_name: nginx
+  traefik:
+    image: traefik:v2.3
+    container_name: traefik
+    command:
+      - --api.insecure=true
+      - --api.dashboard=true
+      - --serversTransport.insecureSkipVerify=true
+      - --api.debug=true
+      - --providers.docker=true
+      - --providers.docker.swarmMode=true
+      - --providers.docker.network=proxy
+      - --providers.docker.exposedByDefault=true
+      - "--providers.docker.defaultRule=Host(`{{ normalize .Name }}.dmz.zapsendapp.com`)"
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecured.address=:443
+      - --entrypoints.web.http.redirections.entryPoint.to=websecured
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      - "--certificatesresolvers.le.acme.dnschallenge=true"
+      - "--certificatesresolvers.le.acme.httpChallenge=false"
+      - "--certificatesresolvers.le.acme.tlsChallenge=false"
+      - "--certificatesresolvers.le.acme.dnschallenge.provider=route53"
+      - "--certificatesresolvers.le.acme.email=fillypef@gmail.com"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.httpChallenge.entryPoint=web"
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./nginx/vhost.d:/etc/nginx/vhost.d:ro
-      - ./nginx/html:/usr/share/nginx/html:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
-      - /var/run/docker.sock:/tmp/docker.sock:ro
-    depends_on:
-      - app
-
-  certbot:
-    image: certbot/certbot
-    container_name: certbot
-    volumes:
-      - ./nginx/certs:/etc/letsencrypt
-      - ./nginx/html:/var/www/html
-    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait ${!}; done;'
-    depends_on:
-      - nginx
-
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./letsencrypt:/letsencrypt"
+  command:
+      - "--log.level=DEBUG"
   app:
-    build: .
     image: app
     volumes:
       - app-storage:/rails/storage
     environment:
       - RAILS_MASTER_KEY=76ffba0370aeea3b6a3971f1f6309674
+      - SECRET_KEY_BASE=d9aad8c0ec027a470523fcf2894e40d9c05fb4ed748f29a126db333adc7b15b8adb548e022cfed19047b78ffb1c14e52831fa94964cb2c1ba98d>
     labels:
-      - "traefik.enable=false" # if you still have traefik labels, disable them
+        - 'traefik.enable=true'
+        - 'traefik.http.routers.traefik.rule=Host(`traefik.dmz.yourdomain.com`)'
+        - 'traefik.http.routers.traefik.tls=true'
+        - 'traefik.http.routers.traefik.tls.certresolver=le'
+        - 'traefik.http.routers.traefik.service=api@internal'
+        - 'traefik.http.services.api.loadbalancer.server.port=8080'
+        - 'traefik.http.routers.traefik.tls.domains[0].main=dmz.yourdomain.com'
+        - 'traefik.http.routers.traefik.tls.domains[0].sans=*.dmz.yourdomain.com'
     networks:
       - web
+
+volumes:
+  app-storage:
 
 networks:
   web:
     external: true
 
-volumes:
-  app-storage:
+
